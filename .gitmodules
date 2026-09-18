@@ -1,0 +1,18 @@
+[submodule "external/cgdkg_artifact"]
+	path = external/cgdkg_artifact
+	url = https://github.com/hsaleemsupra/cgdkg_artifact
+	ignore = dirty
+[submodule "external/cgdkg_artifact_blst"]
+	path = external/cgdkg_artifact_blst
+	url = https://github.com/alinush/cgdkg_artifact
+[submodule "external/fastcrypto"]
+	path = external/fastcrypto
+	url = https://github.com/MystenLabs/fastcrypto
+	ignore = dirty
+[submodule "external/golden-rs"]
+	path = external/golden-rs
+	url = https://github.com/farazshaikh/golden-rs
+[submodule "external/e2e-vss"]
+	path = external/e2e-vss
+	url = https://github.com/sourav1547/e2e-vss
+	ignore = dirty

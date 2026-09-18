@@ -1,0 +1,503 @@
+diff --git a/Dockerfile b/Dockerfile
+index b4c3e21..607aeb0 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -1,10 +1,6 @@
+ # Use the official Rust image from the Docker Hub
+ FROM rust:1.77 as builder
+ 
+-WORKDIR cgdkg_artifact
+-
+-COPY . .
+-
+ RUN apt-get update && apt-get install -y \
+     build-essential \
+     cmake \
+@@ -17,6 +13,9 @@ RUN apt-get update && apt-get install -y \
+ # Set the environment variable to suppress all compiler warnings
+ ENV RUSTFLAGS="-A warnings"
+ 
++WORKDIR cgdkg_artifact
++COPY . .
++
+ RUN cargo build --release 
+ 
+ # Default command runs the benchmarks without displaying warnings
+diff --git a/benches/benchmarks_cd_dkg.rs b/benches/benchmarks_cd_dkg.rs
+index d6249c1..5743404 100644
+--- a/benches/benchmarks_cd_dkg.rs
++++ b/benches/benchmarks_cd_dkg.rs
+@@ -1,3 +1,5 @@
++// Cascudo-David protocol over class group
++
+ extern crate cd;
+ 
+ use bicycl::b_i_c_y_c_l::{CLHSMqk, Mpz, QFI, RandGen};
+@@ -162,6 +164,7 @@ fn gen_dealing_vss(config: &DkgConfig, cl: &CppBox<CLHSMqk>, rng: &mut RAND_ChaC
+ }
+ 
+ fn benchmark_config(c: &mut Criterion) {
++    return; // skipping
+ 
+     // Create a benchmark group
+     let mut group = c.benchmark_group("CD23 Class group");
+@@ -169,10 +172,11 @@ fn benchmark_config(c: &mut Criterion) {
+     group.sample_size(10);
+ 
+     let configs = vec![
+-        DkgConfig { total_nodes: 50, threshold: 25 },
+-        DkgConfig { total_nodes: 100, threshold: 50 },
+-        DkgConfig { total_nodes: 150, threshold: 75 },
+-        DkgConfig { total_nodes: 200, threshold: 100 },
++        DkgConfig { total_nodes: 64, threshold: 42 },
++        // DkgConfig { total_nodes: 128, threshold: 84 },
++        // DkgConfig { total_nodes: 256, threshold: 170 },
++        // DkgConfig { total_nodes: 512, threshold: 340 },
++        // DkgConfig { total_nodes: 1024, threshold: 682 },
+     ];
+ 
+     let seed = [4u8; 32];
+@@ -199,12 +203,12 @@ fn benchmark_config(c: &mut Criterion) {
+         let (dealing, instance) = gen_dealing_vss(&config, &cl, rng, &mut rng_cpp, &pks);
+ 
+         // Receiver time benchmarks
+-        group.bench_with_input(BenchmarkId::new("VSS: Receiver Time (verify_sharing + decrypt_share)", format!("n: {} t: {}", config.total_nodes, config.threshold)), &config, |b, _cfg| {
++        group.bench_with_input(BenchmarkId::new("VSS: Receiver Time (verify_sharing)", format!("n: {} t: {}", config.total_nodes, config.threshold)), &config, |b, _cfg| {
+             b.iter(|| unsafe {
+                 verify_sharing_vss(&config, &instance,
+                                    &dealing.zk_proof_correct_sharing,
+                                    &cl).expect("Verification failed");
+-                let _pt = decrypt(&cl, &sks[0], &dealing.ciphertexts[0]);
++                // let _pt = decrypt(&cl, &sks[0], &dealing.ciphertexts[0]);
+             });
+         });
+ 
+@@ -213,57 +217,57 @@ fn benchmark_config(c: &mut Criterion) {
+ 
+     }
+ 
+-    let configs = vec![
+-        DkgConfig { total_nodes: 10, threshold: 5 },
+-        DkgConfig { total_nodes: 20, threshold: 10 },
+-        DkgConfig { total_nodes: 30, threshold: 15 },
+-        DkgConfig { total_nodes: 40, threshold: 20 },
+-        DkgConfig { total_nodes: 50, threshold: 25 },
+-    ];
+-
+-    // Benchmarking DKG computation cost per node for node n-1
+-    // Note here we don't compute the cost for running the DKG in a threshold setting as it requires
+-    // setting up a committee of nodes for DKG and a SMR committee.
+-    // We only benchmark the computation cost of a node in the DKG committee
+-    for config in &configs{
+-        let mut dealings = Vec::new();
+-        let mut sharing_instances = Vec::new();
+-        //generate sks and pks for each node in a central trusted party setup
+-        let (sks, pks) = gen_keys(&config, &cl, &mut rng_cpp);
+-
+-        //generating dealings for other nodes except self
+-        for _i in 0.. config.threshold - 1{
+-            let (dealing, instance) = gen_dealing_dkg(&config, &cl, rng, &mut rng_cpp, &pks);
+-            dealings.push(dealing);
+-            sharing_instances.push(instance);
+-        }
+-
+-        group.bench_with_input(BenchmarkId::new("DKG: Compute per node (dealer_cost + t * verifier_cost + agg_dealings)", format!("n: {} t: {}", config.total_nodes, config.threshold)), &config, |b, _cfg| {
+-            b.iter(|| unsafe {
+-
+-                // Dealing gen for node t
+-                let (dealing, instance) = gen_dealing_dkg(&config, &cl, rng, &mut rng_cpp, &pks);
+-                dealings.push(dealing);
+-                sharing_instances.push(instance);
+-
+-                // Verify t-1 dealings
+-                let mut verified_dealings = Vec::new();
+-                for i in 0..dealings.len()-1{
+-                    if verify_sharing_dkg(&config, &sharing_instances[i], &dealings[i].zk_proof_correct_sharing, &cl) == Ok(()){
+-                        verified_dealings.push(dealings[i].clone());
+-                    }
+-                }
+-
+-                // node's own dealing need not to be verified
+-                verified_dealings.push(dealings[dealings.len()-1].clone());
+-                assert!(verified_dealings.len()>=config.threshold);
+-                let (_sk, _committee_pk, _pk_shares) = aggregate_dealings(&cl, &verified_dealings,
+-                                                                          &sks[config.threshold - 1],
+-                                                                          config.threshold-1).unwrap();
+-            });
+-        });
+-
+-    }
++    // let configs = vec![
++    //     DkgConfig { total_nodes: 10, threshold: 5 },
++    //     DkgConfig { total_nodes: 20, threshold: 10 },
++    //     DkgConfig { total_nodes: 30, threshold: 15 },
++    //     DkgConfig { total_nodes: 40, threshold: 20 },
++    //     DkgConfig { total_nodes: 50, threshold: 25 },
++    // ];
++
++    // // Benchmarking DKG computation cost per node for node n-1
++    // // Note here we don't compute the cost for running the DKG in a threshold setting as it requires
++    // // setting up a committee of nodes for DKG and a SMR committee.
++    // // We only benchmark the computation cost of a node in the DKG committee
++    // for config in &configs{
++    //     let mut dealings = Vec::new();
++    //     let mut sharing_instances = Vec::new();
++    //     //generate sks and pks for each node in a central trusted party setup
++    //     let (sks, pks) = gen_keys(&config, &cl, &mut rng_cpp);
++
++    //     //generating dealings for other nodes except self
++    //     for _i in 0.. config.threshold - 1{
++    //         let (dealing, instance) = gen_dealing_dkg(&config, &cl, rng, &mut rng_cpp, &pks);
++    //         dealings.push(dealing);
++    //         sharing_instances.push(instance);
++    //     }
++
++    //     group.bench_with_input(BenchmarkId::new("DKG: Compute per node (dealer_cost + t * verifier_cost + agg_dealings)", format!("n: {} t: {}", config.total_nodes, config.threshold)), &config, |b, _cfg| {
++    //         b.iter(|| unsafe {
++
++    //             // Dealing gen for node t
++    //             let (dealing, instance) = gen_dealing_dkg(&config, &cl, rng, &mut rng_cpp, &pks);
++    //             dealings.push(dealing);
++    //             sharing_instances.push(instance);
++
++    //             // Verify t-1 dealings
++    //             let mut verified_dealings = Vec::new();
++    //             for i in 0..dealings.len()-1{
++    //                 if verify_sharing_dkg(&config, &sharing_instances[i], &dealings[i].zk_proof_correct_sharing, &cl) == Ok(()){
++    //                     verified_dealings.push(dealings[i].clone());
++    //                 }
++    //             }
++
++    //             // node's own dealing need not to be verified
++    //             verified_dealings.push(dealings[dealings.len()-1].clone());
++    //             assert!(verified_dealings.len()>=config.threshold);
++    //             let (_sk, _committee_pk, _pk_shares) = aggregate_dealings(&cl, &verified_dealings,
++    //                                                                       &sks[config.threshold - 1],
++    //                                                                       config.threshold-1).unwrap();
++    //         });
++    //     });
++
++    // }
+     group.finish();
+ 
+ }
+diff --git a/benches/benchmarks_cgdkg.rs b/benches/benchmarks_cgdkg.rs
+index edc53d4..5b276fa 100644
+--- a/benches/benchmarks_cgdkg.rs
++++ b/benches/benchmarks_cgdkg.rs
+@@ -1,3 +1,5 @@
++// cgDKG
++
+ extern crate classgroup;
+ 
+ use bicycl::b_i_c_y_c_l::{CLHSMqk, Mpz, QFI, RandGen};
+@@ -125,10 +127,11 @@ fn benchmark_cg_dkg(c: &mut Criterion) {
+     group.sample_size(10);
+ 
+     let configs = vec![
+-        DkgConfig { total_nodes: 50, threshold: 25 },
+-        DkgConfig { total_nodes: 100, threshold: 50 },
+-        DkgConfig { total_nodes: 150, threshold: 75 },
+-        DkgConfig { total_nodes: 200, threshold: 100 },
++        DkgConfig { total_nodes: 64, threshold: 42 },
++        DkgConfig { total_nodes: 128, threshold: 84 },
++        DkgConfig { total_nodes: 256, threshold: 170 },
++        DkgConfig { total_nodes: 512, threshold: 340 },
++        DkgConfig { total_nodes: 1024, threshold: 682 },
+     ];
+ 
+     let seed = [4u8; 32];
+@@ -155,12 +158,12 @@ fn benchmark_cg_dkg(c: &mut Criterion) {
+         let (dealing, instance) = gen_dealing(&config, &cl, rng, &mut rng_cpp, &pks);
+ 
+         // Receiver time benchmarks
+-        group.bench_with_input(BenchmarkId::new("VSS: Receiver Time (verify_sharing + decrypt_share)", format!("n: {} t: {}", config.total_nodes, config.threshold)), &config, |b, _cfg| {
++        group.bench_with_input(BenchmarkId::new("VSS: Receiver Time (verify_sharing)", format!("n: {} t: {}", config.total_nodes, config.threshold)), &config, |b, _cfg| {
+             b.iter(|| {
+                 verify_sharing(&instance,
+                                &dealing.zk_proof_correct_sharing,
+                                &cl).expect("Verification failed");
+-                let _pt = decrypt(&cl, &sks[0], &dealing.ciphertexts[0]);
++                // let _pt = decrypt(&cl, &sks[0], &dealing.ciphertexts[0]);
+             });
+         });
+         
+@@ -168,58 +171,58 @@ fn benchmark_cg_dkg(c: &mut Criterion) {
+         println!("Classgroup VSS Dealing Size: {:?} Kbits. (n: {:?}, t: {:?})", dealing_size, config.total_nodes, config.threshold);
+     }
+ 
+-    let configs = vec![
+-        DkgConfig { total_nodes: 10, threshold: 5 },
+-        DkgConfig { total_nodes: 20, threshold: 10 },
+-        DkgConfig { total_nodes: 30, threshold: 15 },
+-        DkgConfig { total_nodes: 40, threshold: 20 },
+-        DkgConfig { total_nodes: 50, threshold: 25 },
+-    ];
+-
+-    // Benchmarking DKG computation cost per node for node n-1
+-    // Note here we don't compute the cost for running the DKG in a threshold setting as it requires
+-    // setting up a committee of nodes for DKG and a SMR committee.
+-    // We only benchmark the computation cost of a node in the DKG committee
+-    for config in &configs{
+-        let mut dealings = Vec::new();
+-        let mut sharing_instances = Vec::new();
+-        //generate sks and pks for each node in a central trusted party setup
+-        let (sks, pks) = gen_keys(&config, &cl, &mut rng_cpp);
+-
+-        //generating dealings for other nodes except self
+-        for _i in 0.. config.threshold - 1{
+-            let (dealing, instance) = gen_dealing(&config, &cl, rng, &mut rng_cpp, &pks);
+-            dealings.push(dealing);
+-            sharing_instances.push(instance);
+-        }
+-
+-        group.bench_with_input(BenchmarkId::new("DKG: Compute per node (dealer_cost + t * verifier_cost + agg_dealings)", format!("n: {} t: {}", config.total_nodes, config.threshold)), &config, |b, _cfg| {
+-            b.iter(|| {
+-
+-                // Dealing gen for node t
+-                let (dealing, instance) = gen_dealing(&config, &cl, rng, &mut rng_cpp, &pks);
+-                dealings.push(dealing);
+-                sharing_instances.push(instance);
+-
+-                // Verify t-1 dealings
+-                let mut verified_dealings = Vec::new();
+-                for i in 0..dealings.len()-1{
+-                    if verify_sharing(&sharing_instances[i], &dealings[i].zk_proof_correct_sharing, &cl) == Ok(()){
+-                        verified_dealings.push(dealings[i].clone());
+-                    }
+-                }
+-
+-                // node's own dealing need not to be verified
+-                verified_dealings.push(dealings[dealings.len()-1].clone());
+-                assert!(verified_dealings.len()>=config.threshold);
+-                let (_sk, _committee_pk, _pk_shares, _public_poly) = aggregate_dealings(&cl, &verified_dealings,
+-                                   &sks[config.threshold - 1],
+-                                   config.threshold-1,
+-                                   config.total_nodes).unwrap();
+-            });
+-        });
+-
+-        }
++    // let configs = vec![
++    //     DkgConfig { total_nodes: 64, threshold: 42 },
++    //     DkgConfig { total_nodes: 128, threshold: 84 },
++    //     DkgConfig { total_nodes: 256, threshold: 170 },
++    //     DkgConfig { total_nodes: 512, threshold: 340 },
++    //     DkgConfig { total_nodes: 1024, threshold: 682 },
++    // ];
++
++    // // Benchmarking DKG computation cost per node for node n-1
++    // // Note here we don't compute the cost for running the DKG in a threshold setting as it requires
++    // // setting up a committee of nodes for DKG and a SMR committee.
++    // // We only benchmark the computation cost of a node in the DKG committee
++    // for config in &configs{
++    //     let mut dealings = Vec::new();
++    //     let mut sharing_instances = Vec::new();
++    //     //generate sks and pks for each node in a central trusted party setup
++    //     let (sks, pks) = gen_keys(&config, &cl, &mut rng_cpp);
++
++    //     //generating dealings for other nodes except self
++    //     for _i in 0.. config.threshold - 1{
++    //         let (dealing, instance) = gen_dealing(&config, &cl, rng, &mut rng_cpp, &pks);
++    //         dealings.push(dealing);
++    //         sharing_instances.push(instance);
++    //     }
++
++    //     group.bench_with_input(BenchmarkId::new("DKG: Compute per node (dealer_cost + t * verifier_cost + agg_dealings)", format!("n: {} t: {}", config.total_nodes, config.threshold)), &config, |b, _cfg| {
++    //         b.iter(|| {
++
++    //             // Dealing gen for node t
++    //             let (dealing, instance) = gen_dealing(&config, &cl, rng, &mut rng_cpp, &pks);
++    //             dealings.push(dealing);
++    //             sharing_instances.push(instance);
++
++    //             // Verify t-1 dealings
++    //             let mut verified_dealings = Vec::new();
++    //             for i in 0..dealings.len()-1{
++    //                 if verify_sharing(&sharing_instances[i], &dealings[i].zk_proof_correct_sharing, &cl) == Ok(()){
++    //                     verified_dealings.push(dealings[i].clone());
++    //                 }
++    //             }
++
++    //             // node's own dealing need not to be verified
++    //             verified_dealings.push(dealings[dealings.len()-1].clone());
++    //             assert!(verified_dealings.len()>=config.threshold);
++    //             let (_sk, _committee_pk, _pk_shares, _public_poly) = aggregate_dealings(&cl, &verified_dealings,
++    //                                &sks[config.threshold - 1],
++    //                                config.threshold-1,
++    //                                config.total_nodes).unwrap();
++    //         });
++    //     });
++
++    //     }
+     group.finish();
+ 
+ }
+diff --git a/benches/benchmarks_grothdkg.rs b/benches/benchmarks_grothdkg.rs
+index 78f2e57..f82536a 100644
+--- a/benches/benchmarks_grothdkg.rs
++++ b/benches/benchmarks_grothdkg.rs
+@@ -1,3 +1,5 @@
++// GrothDKG
++
+ extern crate groth;
+ 
+ use groth::nidkg_dealing::aggregate_dealings;
+@@ -186,10 +188,12 @@ fn benchmark_groth(c: &mut Criterion) {
+     group.sample_size(10);
+ 
+     let configs = vec![
+-        DkgConfig { total_nodes: 50, threshold: 25 },
+-        DkgConfig { total_nodes: 100, threshold: 50 },
+-        DkgConfig { total_nodes: 150, threshold: 75 },
+-        DkgConfig { total_nodes: 200, threshold: 100 },
++        DkgConfig { total_nodes: 64, threshold: 42 },
++        DkgConfig { total_nodes: 128, threshold: 84 },
++        DkgConfig { total_nodes: 256, threshold: 170 },
++        // GrothVSS is omitted beyond n=256 in the paper (too slow); larger sizes disabled.
++        // DkgConfig { total_nodes: 512, threshold: 340 },
++        // DkgConfig { total_nodes: 1024, threshold: 682 },
+     ];
+ 
+     let seed = [4u8; 32];
+@@ -208,13 +212,13 @@ fn benchmark_groth(c: &mut Criterion) {
+ 
+         let (dealing, sharing_instance, chunking_instance) = gen_dealing(&config, rng, &pks);
+ 
+-        group.bench_with_input(BenchmarkId::new("VSS Receiver Time (verify_sharing + verify_chunking + decrypt_share)", format!("n: {}, t: {}", config.total_nodes, config.threshold)), &config, |b, _cfg| {
++        group.bench_with_input(BenchmarkId::new("VSS Receiver Time (verify_sharing + verify_chunking)", format!("n: {}, t: {}", config.total_nodes, config.threshold)), &config, |b, _cfg| {
+             b.iter(|| {
+                 verify_sharing(&sharing_instance, &dealing.zk_proof_correct_sharing).expect("Verification failed");
+                 verify_chunking(&chunking_instance, &dealing.zk_proof_decryptability).expect("Verification failed");
+-                let _pt = elgamal_decrypt_one(&dealing.ciphertexts.cc[0],
+-                                             &sks[0],
+-                                             &dealing.ciphertexts.rr);
++                // let _pt = elgamal_decrypt_one(&dealing.ciphertexts.cc[0],
++                //                              &sks[0],
++                //                              &dealing.ciphertexts.rr);
+             });
+         });
+ 
+@@ -222,64 +226,64 @@ fn benchmark_groth(c: &mut Criterion) {
+         println!("Groth's VSS Dealing Size: {:?} Kbits. (n: {:?}, t: {:?})", dealing_size, config.total_nodes, config.threshold);
+     }
+ 
+-    let configs = vec![
+-        DkgConfig { total_nodes: 10, threshold: 5 },
+-        DkgConfig { total_nodes: 20, threshold: 10 },
+-        DkgConfig { total_nodes: 30, threshold: 15 },
+-        DkgConfig { total_nodes: 40, threshold: 20 },
+-        DkgConfig { total_nodes: 50, threshold: 25 },
+-    ];
+-
+-    // Benchmarking DKG computation cost per node for node n-1
+-    // Note here we don't compute the cost for running the DKG in a threshold setting as it requires
+-    // setting up a committee of nodes for DKG and a SMR committee.
+-    // We only benchmark the computation cost of a node in the DKG committee
+-    for config in &configs{
+-        let mut dealings = Vec::new();
+-        let mut sharing_instances = Vec::new();
+-        let mut chunking_instances = Vec::new();
+-        //generate sks and pks for each node in a central trusted party setup
+-        let (sks, pks) = gen_keys(&config, rng);
+-
+-        //generating dealings for other nodes except self
+-        for _i in 0.. config.threshold - 1{
+-            let (dealing, sharing_instance, chunking_instance) = gen_dealing(&config, rng, &pks);
+-            dealings.push(dealing);
+-            sharing_instances.push(sharing_instance);
+-            chunking_instances.push(chunking_instance);
+-        }
+-
+-        group.bench_with_input(BenchmarkId::new("DKG: Compute per node (dealer_cost + t * verifier_cost + agg_dealings)", format!("n: {} t: {}", config.total_nodes, config.threshold)), &config, |b, _cfg| {
+-            b.iter(|| {
+-                // Dealing gen for node t
+-                let (dealing, sharing_instance, chunking_instance) = gen_dealing(&config, rng, &pks);
+-                dealings.push(dealing);
+-                sharing_instances.push(sharing_instance);
+-                chunking_instances.push(chunking_instance);
+-
+-                // Verify t-1 dealings
+-                let mut verified_dealings = Vec::new();
+-                for i in 0..dealings.len()-1{
+-                    if verify_sharing(&sharing_instances[i], &dealings[i].zk_proof_correct_sharing) == Ok(()) &&
+-                        verify_chunking(&chunking_instances[i], &dealings[i].zk_proof_decryptability) == Ok(()){
+-                        verified_dealings.push(dealings[i].clone());
+-                    }
+-                }
+-
+-                // node's own dealing need not to be verified
+-                verified_dealings.push(dealings[dealings.len()-1].clone());
+-                assert!(verified_dealings.len()>=config.threshold);
+-
+-                let (_sk, _committee_pk, _pk_shares, _public_poly) = aggregate_dealings(&verified_dealings,
+-                                                                                        &sks[config.threshold - 1],
+-                                                                                        config.threshold-1,
+-                                                                                        config.total_nodes).unwrap();
+-            });
+-        });
+-
+-    }
++    // let configs = vec![
++    //     DkgConfig { total_nodes: 64, threshold: 42 },
++    //     DkgConfig { total_nodes: 128, threshold: 84 },
++    //     DkgConfig { total_nodes: 256, threshold: 170 },
++    //     DkgConfig { total_nodes: 512, threshold: 340 },
++    //     DkgConfig { total_nodes: 1024, threshold: 682 },
++    // ];
++
++    // // Benchmarking DKG computation cost per node for node n-1
++    // // Note here we don't compute the cost for running the DKG in a threshold setting as it requires
++    // // setting up a committee of nodes for DKG and a SMR committee.
++    // // We only benchmark the computation cost of a node in the DKG committee
++    // for config in &configs{
++    //     let mut dealings = Vec::new();
++    //     let mut sharing_instances = Vec::new();
++    //     let mut chunking_instances = Vec::new();
++    //     //generate sks and pks for each node in a central trusted party setup
++    //     let (sks, pks) = gen_keys(&config, rng);
++
++    //     //generating dealings for other nodes except self
++    //     for _i in 0.. config.threshold - 1{
++    //         let (dealing, sharing_instance, chunking_instance) = gen_dealing(&config, rng, &pks);
++    //         dealings.push(dealing);
++    //         sharing_instances.push(sharing_instance);
++    //         chunking_instances.push(chunking_instance);
++    //     }
++
++    //     group.bench_with_input(BenchmarkId::new("DKG: Compute per node (dealer_cost + t * verifier_cost + agg_dealings)", format!("n: {} t: {}", config.total_nodes, config.threshold)), &config, |b, _cfg| {
++    //         b.iter(|| {
++    //             // Dealing gen for node t
++    //             let (dealing, sharing_instance, chunking_instance) = gen_dealing(&config, rng, &pks);
++    //             dealings.push(dealing);
++    //             sharing_instances.push(sharing_instance);
++    //             chunking_instances.push(chunking_instance);
++
++    //             // Verify t-1 dealings
++    //             let mut verified_dealings = Vec::new();
++    //             for i in 0..dealings.len()-1{
++    //                 if verify_sharing(&sharing_instances[i], &dealings[i].zk_proof_correct_sharing) == Ok(()) &&
++    //                     verify_chunking(&chunking_instances[i], &dealings[i].zk_proof_decryptability) == Ok(()){
++    //                     verified_dealings.push(dealings[i].clone());
++    //                 }
++    //             }
++
++    //             // node's own dealing need not to be verified
++    //             verified_dealings.push(dealings[dealings.len()-1].clone());
++    //             assert!(verified_dealings.len()>=config.threshold);
++
++    //             let (_sk, _committee_pk, _pk_shares, _public_poly) = aggregate_dealings(&verified_dealings,
++    //                                                                                     &sks[config.threshold - 1],
++    //                                                                                     config.threshold-1,
++    //                                                                                     config.total_nodes).unwrap();
++    //         });
++    //     });
++
++    // }
+     group.finish();
+ }
+ 
+ criterion_group!(benches, benchmark_groth);
+-criterion_main!(benches);
+\ No newline at end of file
++criterion_main!(benches);

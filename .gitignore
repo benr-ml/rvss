@@ -1,0 +1,7 @@
+/target/
+
+# build artifacts inside the external/ submodules
+target/
+
+# local benchmark output
+/results/

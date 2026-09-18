@@ -1,0 +1,24 @@
+[package]
+name = "research_rvss"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Research prototype of the RVSS (Reconstructable Verifiable Secret Sharing) protocol, for benchmarking only"
+publish = false
+
+[dependencies]
+either = { version = "1.13.0", features = ["serde"] }
+rand = { version = "0.8.5", features = ["std"] }
+serde = { version = "1.0.152", features = ["derive"] }
+bcs = "0.1.4"
+itertools = "0.10.5"
+fastcrypto = { path = "external/fastcrypto/fastcrypto" }
+fastcrypto-tbls = { path = "external/fastcrypto/fastcrypto-tbls" }
+
+[dev-dependencies]
+criterion = "0.5.1"
+
+[[bench]]
+name = "rvss"
+harness = false
+path = "src/rvss_benches.rs"

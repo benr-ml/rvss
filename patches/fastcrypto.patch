@@ -1,0 +1,61 @@
+diff --git a/fastcrypto-tbls/src/dl_verification.rs b/fastcrypto-tbls/src/dl_verification.rs
+index 3db2daf..d28cbac 100644
+--- a/fastcrypto-tbls/src/dl_verification.rs
++++ b/fastcrypto-tbls/src/dl_verification.rs
+@@ -68,9 +68,12 @@ pub fn verify_poly_evals<G: GroupElement + MultiScalarMul, R: AllowedRng>(
+     }
+ }
+ 
+-/// Check that a pair (k, H) satisfies H = k*G using a random combination of the pairs and
++/// Check that a pair (k, H) satisfies H = k*base using a random combination of the pairs and
+ /// multi scalar multiplication.
++// RVSS modification: added the `base` parameter (was hardcoded to `G::generator()`) so the
++// recovery gadget can batch-verify exponents against a non-generator base.
+ pub fn verify_pairs<G: GroupElement + MultiScalarMul, R: AllowedRng>(
++    base: &G,
+     pairs: &[(G::ScalarType, G)],
+     rng: &mut R,
+ ) -> FastCryptoResult<()> {
+@@ -80,8 +83,8 @@ pub fn verify_pairs<G: GroupElement + MultiScalarMul, R: AllowedRng>(
+     // Denote the inputs by (k1, H1), (k2, H2), ..., (kn, Hn)
+     // Generate random r1, r2, ..., rn
+     let rs = get_random_scalars::<G::ScalarType, R>(pairs.len(), rng);
+-    // Compute (r1*k1 + r2*k2 + ... + rn*kn)*G
+-    let lhs = G::generator()
++    // Compute (r1*k1 + r2*k2 + ... + rn*kn)*base
++    let lhs = *base
+         * rs.iter()
+             .zip(pairs.iter())
+             .map(|(r, (k, _))| *r * *k)
+diff --git a/fastcrypto/src/groups/bls12381.rs b/fastcrypto/src/groups/bls12381.rs
+index 314ecef..570e23d 100644
+--- a/fastcrypto/src/groups/bls12381.rs
++++ b/fastcrypto/src/groups/bls12381.rs
+@@ -13,7 +13,9 @@ use crate::serde_helpers::BytesRepresentation;
+ use crate::serde_helpers::ToFromByteArray;
+ use crate::traits::AllowedRng;
+ use crate::utils::log2_byte;
+-use crate::{generate_bytes_representation, serialize_deserialize_with_to_from_byte_array};
++use crate::{generate_bytes_representation, hash, serialize_deserialize_with_to_from_byte_array};
++// RVSS modification: hash-to-scalar support (see `impl HashToGroupElement for Scalar` below).
++use hash::*;
+ use blst::{
+     blst_bendian_from_scalar, blst_final_exp, blst_fp, blst_fp12, blst_fp12_inverse, blst_fp12_mul,
+     blst_fp12_one, blst_fp12_sqr, blst_fp_from_bendian, blst_fr, blst_fr_add, blst_fr_cneg,
+@@ -270,6 +272,16 @@ impl Pairing for G1Element {
+     }
+ }
+ 
++// RVSS modification: hash a message to a BLS12-381 scalar (needed by the RVSS
++// low-degree NIZK and the self-implemented DLEQ proof, which Fiat-Shamir-hash the
++// transcript to a field challenge).
++impl HashToGroupElement for Scalar {
++    fn hash_to_group_element(msg: &[u8]) -> Self {
++        let hash = Sha512::digest(msg);
++        reduce_mod_uniform_buffer(hash.as_ref())
++    }
++}
++
+ impl HashToGroupElement for G1Element {
+     fn hash_to_group_element(msg: &[u8]) -> Self {
+         let mut res = blst_p1::default();
