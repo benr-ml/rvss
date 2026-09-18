@@ -1,5 +1,5 @@
 
-# research_rvss
+# rvss
 
 Prototype implementation and benchmarking harness supporting the paper
 **"Reconstructable VSS and High Threshold DKG of Field Elements"**.
