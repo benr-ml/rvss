@@ -14,6 +14,10 @@ use std::num::NonZeroU16;
 
 /////// Implementation of the RVSS protocol for performance testing ONLY ///////
 
+// Note: the per-instance random-oracle contexts of the paper (Section 2) are not implemented.
+// Here we use fixed labels without a session id or party identities.
+// Adding the context only changes the hashed prefix and does not affect the measured costs.
+
 // Switch the group by commenting and uncommenting the following lines
 
 /////// BLS12-381 test ///////
@@ -82,6 +86,10 @@ impl Gadget {
         let ro = RandomOracle::new("gadget");
         let g = Point::generator();
 
+        if self.t.len() != k || self.u.len() != k {
+            return Err(FastCryptoError::InvalidInput);
+        }
+
         // We check all exponents in a batch
         let mut tuples_1 = Vec::new();
         let mut tuples_2 = Vec::new();
@@ -92,13 +100,8 @@ impl Gadget {
             if bit == 0 {
                 if let Either::Left(u_j) = self.u[i] {
                     let hash = &ro.evaluate(&(i, &u_j))[0..32];
-                    let r_j = hash
-                        .iter()
-                        .zip(&self.t[i].1)
-                        .map(|(x1, &x2)| x1 ^ x2)
-                        .collect_vec();
-                    let r_j: Scalar =
-                        Scalar::from_byte_array(&r_j[0..32].try_into().unwrap()).unwrap();
+                    // An opened tuple whose pad does not decode to a scalar is invalid
+                    let r_j = unpad_scalar(hash, &self.t[i].1)?;
                     // check that g_j = g * r_j
                     tuples_1.push((r_j, u_j));
                     // check that t_j = h * r_j
@@ -121,6 +124,9 @@ impl Gadget {
     pub fn decrypt(&self, k: usize, g_omega: Point) -> FastCryptoResult<Scalar> {
         let ro = RandomOracle::new("gadget");
         let g = Point::generator();
+        if self.t.len() != k || self.u.len() != k {
+            return Err(FastCryptoError::InvalidInput);
+        }
         let d = ro.evaluate(&(g, self.h, self.h_omega, &self.t));
         for i in 0..k {
             if d[i / 8] & (1 << (i % 8)) != 0 {
@@ -128,14 +134,12 @@ impl Gadget {
                     // diff = r_i - omega, so g^{r_i} = g^diff * g^omega.
                     let g_ri = g * diff + g_omega;
                     let hash = &ro.evaluate(&(i, &g_ri))[0..32];
-                    let r_i = hash
-                        .iter()
-                        .zip(&self.t[i].1)
-                        .map(|(&x1, &x2)| x1 ^ x2)
-                        .collect_vec();
-                    let r_i = Scalar::from_byte_array(&r_i[0..32].try_into().unwrap())?;
-                    if self.h * r_i == self.t[i].0 {
-                        return Ok(r_i - diff);
+                    // A tuple whose pad does not decode is invalid. Skip it rather than fail,
+                    // since a single valid unopened tuple suffices.
+                    if let Ok(r_i) = unpad_scalar(hash, &self.t[i].1) {
+                        if self.h * r_i == self.t[i].0 {
+                            return Ok(r_i - diff);
+                        }
                     }
                 }
             }
@@ -163,27 +167,32 @@ impl LDProof {
         g2: &[Point],
         h1: &[Point],
         h2: &[Point],
+        alphas: &[usize],
+        t: usize,
         w: &Poly<Scalar>,
     ) -> LDProof {
         assert!(g1.len() == g2.len());
         assert!(g1.len() == h1.len());
         assert!(g1.len() == h2.len());
+        assert!(g1.len() == alphas.len());
+        assert!(w.degree() <= t);
 
         let ro = RandomOracle::new("mldei");
 
-        let r = Poly::rand(w.degree() as u16, &mut thread_rng());
+        let r = Poly::rand(t as u16, &mut thread_rng());
 
         let x = g1
             .iter()
             .zip(g2.iter())
             .enumerate()
             .map(|(j, (base1, base2))| {
-                let r_j = poly_eval_at(&r, j);
+                let r_j = poly_eval_at(&r, alphas[j]);
                 [base1 * r_j, base2 * r_j]
             })
             .collect_vec();
 
-        let e: Scalar = Scalar::hash_to_group_element(&ro.evaluate(&(g1, g2, h1, h2, &x)));
+        let e: Scalar =
+            Scalar::hash_to_group_element(&ro.evaluate(&(g1, g2, h1, h2, alphas, t, &x)));
         let neg_e = -e;
         let z = r + &(w.clone() * &neg_e);
 
@@ -192,11 +201,12 @@ impl LDProof {
 
     pub fn verify(
         &self,
-        t: usize,
         g1: &[Point],
         g2: &[Point],
         h1: &[Point],
         h2: &[Point],
+        alphas: &[usize],
+        t: usize,
     ) -> FastCryptoResult<()> {
         let ro = RandomOracle::new("mldei");
         let mut rng = thread_rng();
@@ -205,7 +215,7 @@ impl LDProof {
             return Err(FastCryptoError::InvalidProof);
         }
 
-        let e = Scalar::hash_to_group_element(&ro.evaluate(&(g1, g2, h1, h2, &self.x)));
+        let e = Scalar::hash_to_group_element(&ro.evaluate(&(g1, g2, h1, h2, alphas, t, &self.x)));
 
         let r = (0..self.x.len())
             .map(|_| {
@@ -217,7 +227,7 @@ impl LDProof {
             .collect::<Vec<_>>();
 
         let z_values = (0..self.x.len())
-            .map(|i| poly_eval_at(&self.z, i))
+            .map(|i| poly_eval_at(&self.z, alphas[i]))
             .collect::<Vec<_>>();
 
         let mut scalars = Vec::new();
@@ -346,7 +356,9 @@ impl RVSS {
         let h_omega = h * omega; // v_0 = h^omega, the recovery gadget's commitment
 
         let (g1, g2, h1, h2) = Self::mldei_vectors(h, h_omega, pks, &c_hat, &v);
-        let mldei_proof = LDProof::new(&g1, &g2, &h1, &h2, &poly);
+        // Evaluation points A = {0, ..., n}, where point 0 carries v_0 = h^omega
+        let alphas = (0..=pks.len()).collect_vec();
+        let mldei_proof = LDProof::new(&g1, &g2, &h1, &h2, &alphas, t, &poly);
 
         RVSS {
             v,
@@ -358,10 +370,15 @@ impl RVSS {
     }
 
     pub fn verify(&self, k: usize, t: usize, pks: &[Point]) -> FastCryptoResult<()> {
+        let n = pks.len();
+        if self.v.len() != n || self.c_hat.len() != n || self.c.len() != n {
+            return Err(FastCryptoError::InvalidInput);
+        }
         let (_g, h) = Self::bases();
         let (g1, g2, h1, h2) =
             Self::mldei_vectors(h, self.gadget.h_omega, pks, &self.c_hat, &self.v);
-        self.mldei_proof.verify(t, &g1, &g2, &h1, &h2)?;
+        let alphas = (0..=n).collect_vec();
+        self.mldei_proof.verify(&g1, &g2, &h1, &h2, &alphas, t)?;
         self.gadget.verify(k)?;
 
         Ok(())
@@ -498,7 +515,23 @@ fn poly_eval_at(poly: &Poly<Scalar>, i: usize) -> Scalar {
     }
 }
 
-// Following tests check the e2e functionalities but not edge cases
+// Remove the one-time pad `pad` from `padded` and decode the result as a scalar. Fails if the
+// lengths differ or the result is not the canonical encoding of an element of Z_q.
+fn unpad_scalar(pad: &[u8], padded: &[u8]) -> FastCryptoResult<Scalar> {
+    if pad.len() != padded.len() {
+        return Err(FastCryptoError::InvalidInput);
+    }
+    let bytes: [u8; 32] = pad
+        .iter()
+        .zip(padded)
+        .map(|(x1, x2)| x1 ^ x2)
+        .collect_vec()
+        .try_into()
+        .map_err(|_| FastCryptoError::InvalidInput)?;
+    Scalar::from_byte_array(&bytes)
+}
+
+// Following tests check the e2e functionalities and a few malformed inputs, not all edge cases
 
 #[test]
 fn test_gadget() {
@@ -511,6 +544,70 @@ fn test_gadget() {
     gadget.verify(128).unwrap_err();
 }
 
+// Build a gadget whose tuple 0 is malformed (under the correct key its pad decodes to
+// 0xff..ff, which is not a canonical scalar) and is opened iff `opened`. The other tuples are
+// valid.
+#[cfg(test)]
+fn gadget_with_malformed_tuple(k: usize, h: Point, omega: Scalar, opened: bool) -> Gadget {
+    let ro = RandomOracle::new("gadget");
+    let g = Point::generator();
+    let h_omega = h * omega;
+    loop {
+        let r = (0..k)
+            .map(|_| Scalar::rand(&mut thread_rng()))
+            .collect_vec();
+        let t = r
+            .iter()
+            .enumerate()
+            .map(|(j, r_j)| {
+                let hash = &ro.evaluate(&(j, &(g * *r_j)))[0..32];
+                let plain = if j == 0 {
+                    [0xff; 32]
+                } else {
+                    r_j.to_byte_array()
+                };
+                let t_j: Vec<u8> = hash.iter().zip(plain).map(|(&x1, x2)| x1 ^ x2).collect();
+                (h * *r_j, t_j)
+            })
+            .collect_vec();
+        let d = ro.evaluate(&(g, h, h_omega, &t));
+        if (d[0] & 1 == 0) != opened {
+            continue;
+        }
+        let u = (0..k)
+            .map(|i| {
+                if d[i / 8] & (1 << (i % 8)) == 0 {
+                    Either::Left(g * r[i])
+                } else {
+                    Either::Right(r[i] - omega)
+                }
+            })
+            .collect();
+        return Gadget { h, h_omega, t, u };
+    }
+}
+
+#[test]
+fn test_gadget_malformed_input() {
+    let k = 80;
+    let (g, h) = RVSS::bases();
+    let omega = Scalar::rand(&mut thread_rng());
+    let g_omega = g * omega;
+
+    gadget_with_malformed_tuple(k, h, omega, true)
+        .verify(k)
+        .unwrap_err();
+
+    let gadget = gadget_with_malformed_tuple(k, h, omega, false);
+    gadget.verify(k).unwrap();
+    assert_eq!(gadget.decrypt(k, g_omega).unwrap(), omega);
+
+    let mut gadget = Gadget::new(k, h, omega);
+    gadget.u.pop();
+    gadget.verify(k).unwrap_err();
+    gadget.decrypt(k, g_omega).unwrap_err();
+}
+
 #[test]
 fn test_mldei() {
     let bases1 = (1..=100)
@@ -520,23 +617,28 @@ fn test_mldei() {
         .map(|i| Point::generator() * Scalar::from(i as u128))
         .collect_vec();
 
-    let t = 31;
-    let p = Poly::rand(t, &mut thread_rng());
+    let t: usize = 31;
+    let alphas = (0..100).collect_vec();
+    let p = Poly::rand(t as u16, &mut thread_rng());
     let exponents1 = (0..100)
-        .map(|i| bases1[i] * poly_eval_at(&p, i))
+        .map(|i| bases1[i] * poly_eval_at(&p, alphas[i]))
         .collect_vec();
     let exponents2 = (0..100)
-        .map(|i| bases2[i] * poly_eval_at(&p, i))
+        .map(|i| bases2[i] * poly_eval_at(&p, alphas[i]))
         .collect_vec();
 
-    let mut proof = LDProof::new(&bases1, &bases2, &exponents1, &exponents2, &p);
+    let mut proof = LDProof::new(&bases1, &bases2, &exponents1, &exponents2, &alphas, t, &p);
     proof
-        .verify(t.into(), &bases1, &bases2, &exponents1, &exponents2)
+        .verify(&bases1, &bases2, &exponents1, &exponents2, &alphas, t)
         .unwrap();
+
+    proof
+        .verify(&bases1, &bases2, &exponents1, &exponents2, &alphas, t + 1)
+        .unwrap_err();
 
     proof.x()[0][0] = Point::generator();
     proof
-        .verify(t.into(), &bases1, &bases2, &exponents1, &exponents2)
+        .verify(&bases1, &bases2, &exponents1, &exponents2, &alphas, t)
         .unwrap_err();
 }
 
@@ -557,6 +659,10 @@ fn test_rvss() {
     rvss.optimistic_decrypt(10, &Scalar::from(11u128)).unwrap();
 
     rvss.c_hat()[0] = Point::generator();
+    rvss.verify(k, t, &pks).unwrap_err();
+
+    let mut rvss = RVSS::new(k, t, omega, &pks);
+    rvss.v.pop();
     rvss.verify(k, t, &pks).unwrap_err();
 }
 
